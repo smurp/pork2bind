@@ -6,6 +6,10 @@
   "bin": {
     "pork2bind": "./pork2bind"
   },
+  "files": [
+    "pork2bind",
+    ".env.example"
+  ],
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },

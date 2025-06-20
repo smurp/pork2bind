@@ -12,7 +12,9 @@ function parseArgs() {
         domains: [],
         to: process.cwd(),
         from: process.cwd(),
-        includeNS: false
+        includeNS: false,
+        quiet: false,
+        stdout: false
     };
 
     for (let i = 0; i < args.length; i++) {
@@ -28,6 +30,10 @@ function parseArgs() {
             config.from = args[++i];
         } else if (arg === '--include-ns') {
             config.includeNS = true;
+        } else if (arg === '--quiet') {
+            config.quiet = true;
+        } else if (arg === '--stdout') {
+            config.stdout = true;
         } else if (arg === '--help' || arg === '-h') {
             showHelp();
             process.exit(0);
@@ -70,6 +76,8 @@ OPTIONS:
   --to         Output directory (default: current directory)
   --from       Input directory for JSON files (default: current directory)
   --include-ns Include NS records in BIND output (default: filtered out)
+  --quiet      Minimal output - only errors and warnings
+  --stdout     Output data to stdout instead of files
   --help       Show this help message
 
 EXAMPLES:
@@ -82,11 +90,35 @@ EXAMPLES:
   # Include NS records in BIND output
   pork2bind --bind example.com --include-ns
 
+  # Quiet operation for scripts
+  pork2bind --json example.com --quiet
+
+  # Output to stdout for piping
+  pork2bind --json example.com --stdout > example.com.json
+  pork2bind --bind example.com --stdout > db.example.com
+
 ENVIRONMENT:
   Requires .env file with:
     PORKBUN_API_KEY=your_api_key
     PORKBUN_SECRET_KEY=your_secret_key
 `);
+}
+
+// Logging functions that respect quiet mode
+function log(message, config) {
+    if (!config.quiet) {
+        console.error(message);
+    }
+}
+
+function logSuccess(message, config) {
+    if (!config.quiet) {
+        console.error(`✓ ${message}`);
+    }
+}
+
+function logError(message, config) {
+    console.error(`✗ ${message}`);
 }
 
 // Load environment variables
@@ -131,8 +163,8 @@ function testAPIConnection(apiKey, secretKey) {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
-                console.log(`API Test - Status: ${res.statusCode}`);
-                console.log(`API Test - Response: ${data}`);
+                console.error(`API Test - Status: ${res.statusCode}`);
+                console.error(`API Test - Response: ${data}`);
                 try {
                     const response = JSON.parse(data);
                     resolve(response);
@@ -170,11 +202,11 @@ function fetchDNSRecords(domain, apiKey, secretKey) {
         };
 
         const req = https.request(options, (res) => {
-            console.log(`Status Code: ${res.statusCode}`);
+            console.error(`Status Code: ${res.statusCode}`);
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
-                console.log(`Raw Response: ${data.substring(0, 200)}...`);
+                console.error(`Raw Response: ${data.substring(0, 200)}...`);
                 try {
                     const response = JSON.parse(data);
                     if (response.status === 'SUCCESS') {
@@ -209,8 +241,11 @@ function generateBindZone(domain, records, includeNS = false) {
     // Filter records if needed
     let filteredRecords = records;
     if (!includeNS) {
+        const originalCount = records.length;
         filteredRecords = records.filter(record => record.type !== 'NS');
-        console.log(`  Filtered out ${records.length - filteredRecords.length} NS record(s)`);
+        if (originalCount > filteredRecords.length) {
+            console.error(`  Filtered out ${originalCount - filteredRecords.length} NS record(s)`);
+        }
     }
     
     let zone = `$TTL 3600
@@ -263,46 +298,60 @@ async function ensureDirectory(dir) {
 // JSON mode: Fetch DNS records and save to JSON files
 async function jsonMode(config) {
     const { apiKey, secretKey } = loadEnv();
-    await ensureDirectory(config.to);
+    
+    if (!config.stdout) {
+        await ensureDirectory(config.to);
+    }
 
     // Test API connection first
-    console.log('Testing API connection...');
+    log('Testing API connection...', config);
     try {
         await testAPIConnection(apiKey, secretKey);
-        console.log('✓ API connection successful\n');
+        log('✓ API connection successful\n', config);
     } catch (error) {
-        console.error(`✗ API connection failed: ${error.message}`);
+        logError(`API connection failed: ${error.message}`, config);
         console.error('Please check your API credentials in .env file\n');
         return;
     }
 
-    console.log(`Fetching DNS records for ${config.domains.length} domain(s)...`);
+    log(`Fetching DNS records for ${config.domains.length} domain(s)...`, config);
     
     for (const domain of config.domains) {
         try {
-            console.log(`Fetching ${domain}...`);
+            log(`Fetching ${domain}...`, config);
             const records = await fetchDNSRecords(domain, apiKey, secretKey);
             
-            const outputFile = path.join(config.to, `${domain}.json`);
-            await fs.writeFile(outputFile, JSON.stringify(records, null, 2));
+            const jsonData = JSON.stringify(records, null, 2);
             
-            console.log(`✓ Saved ${records.length} records to ${outputFile}`);
+            if (config.stdout) {
+                // Output to stdout for piping
+                console.log(jsonData);
+                if (config.domains.length > 1) {
+                    console.error('Warning: Multiple domains with --stdout will concatenate JSON objects');
+                }
+            } else {
+                // Save to file
+                const outputFile = path.join(config.to, `${domain}.json`);
+                await fs.writeFile(outputFile, jsonData);
+                logSuccess(`Saved ${records.length} records to ${outputFile}`, config);
+            }
         } catch (error) {
-            console.error(`✗ Failed to fetch ${domain}: ${error.message}`);
+            logError(`Failed to fetch ${domain}: ${error.message}`, config);
         }
     }
 }
 
 // BIND mode: Convert JSON files to BIND zone files
 async function bindMode(config) {
-    await ensureDirectory(config.to);
+    if (!config.stdout) {
+        await ensureDirectory(config.to);
+    }
 
-    console.log(`Converting ${config.domains.length} domain(s) to BIND format...`);
+    log(`Converting ${config.domains.length} domain(s) to BIND format...`, config);
     
     for (const domain of config.domains) {
         try {
             const inputFile = path.join(config.from, `${domain}.json`);
-            const outputFile = path.join(config.to, `db.${domain}`);
             
             // Read JSON file
             const jsonData = await fs.readFile(inputFile, 'utf8');
@@ -310,14 +359,24 @@ async function bindMode(config) {
             
             // Generate BIND zone
             const zoneContent = generateBindZone(domain, records, config.includeNS);
-            await fs.writeFile(outputFile, zoneContent);
             
-            console.log(`✓ Converted ${domain} (${records.length} records) to ${outputFile}`);
+            if (config.stdout) {
+                // Output to stdout for piping
+                console.log(zoneContent);
+                if (config.domains.length > 1) {
+                    console.error('Warning: Multiple domains with --stdout will concatenate zone files');
+                }
+            } else {
+                // Save to file
+                const outputFile = path.join(config.to, `db.${domain}`);
+                await fs.writeFile(outputFile, zoneContent);
+                logSuccess(`Converted ${domain} (${records.length} records) to ${outputFile}`, config);
+            }
         } catch (error) {
             if (error.code === 'ENOENT') {
-                console.error(`✗ JSON file not found: ${path.join(config.from, domain + '.json')}`);
+                logError(`JSON file not found: ${path.join(config.from, domain + '.json')}`, config);
             } else {
-                console.error(`✗ Failed to convert ${domain}: ${error.message}`);
+                logError(`Failed to convert ${domain}: ${error.message}`, config);
             }
         }
     }
@@ -334,7 +393,9 @@ async function main() {
             await bindMode(config);
         }
         
-        console.log('Done!');
+        if (!config.quiet && !config.stdout) {
+            console.error('Done!');
+        }
     } catch (error) {
         console.error(`Error: ${error.message}`);
         process.exit(1);
@@ -347,4 +408,3 @@ if (require.main === module) {
 }
 
 module.exports = { parseArgs, fetchDNSRecords, generateBindZone };
-

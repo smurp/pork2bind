@@ -9,6 +9,7 @@ Convert Porkbun DNS records to BIND zone files with a simple two-phase workflow.
 - **Smart filtering**: Automatically filters out external NS records (with override option)
 - **Flexible directories**: Control input/output locations
 - **Standard BIND format**: Generates properly formatted zone files with timestamp-based serials
+- **Clean output control**: Quiet mode and stdout output for scripting and automation
 
 ## Installation
 
@@ -91,17 +92,19 @@ pork2bind --bind example.com --include-ns
 
 ### Global Options
 - `--to <directory>` - Output directory (default: current directory)
+- `--quiet` - Minimal output, only errors and warnings
+- `--stdout` - Output data to stdout instead of files (for piping)
 - `--help` - Show help message
 
 ### JSON Mode (`--json`)
 - Fetches DNS records from Porkbun API
-- Saves records as `domain.json` files
+- Saves records as `domain.json` files (or to stdout with `--stdout`)
 - Requires valid API credentials in `.env`
 
 ### BIND Mode (`--bind`)
 - `--from <directory>` - Input directory for JSON files (default: current directory)
 - `--include-ns` - Include NS records in output (default: filtered out)
-- Converts JSON to BIND zone files as `db.domain`
+- Converts JSON to BIND zone files as `db.domain` (or to stdout with `--stdout`)
 
 ## Examples
 
@@ -110,7 +113,7 @@ pork2bind --bind example.com --include-ns
 # Fetch data
 pork2bind --json mysite.com
 
-# Generate zone file  
+# Generate zone file
 pork2bind --bind mysite.com
 ```
 
@@ -129,6 +132,32 @@ pork2bind --bind site1.com site2.com site3.com \
 ```bash
 # Keep Porkbun NS records in zone file
 pork2bind --bind mysite.com --include-ns
+```
+
+### Output Control and Scripting
+```bash
+# Quiet operation (minimal output)
+pork2bind --json mysite.com --quiet
+
+# Output to stdout for piping/redirection
+pork2bind --json mysite.com --stdout > mysite.json
+pork2bind --bind mysite.com --stdout > db.mysite
+
+# Combine for silent piping
+pork2bind --bind mysite.com --stdout --quiet > /etc/bind/zones/db.mysite
+```
+
+### Shell Pipeline Examples
+```bash
+# Fetch and convert in one pipeline
+pork2bind --json mysite.com --stdout | \
+  jq '.[] | select(.type == "A")' | \
+  pork2bind --bind mysite.com --from /dev/stdin --stdout > only-a-records.zone
+
+# Backup all domains
+for domain in $(cat domains.txt); do
+  pork2bind --json $domain --stdout --quiet > backup/${domain}.json
+done
 ```
 
 ## Output Format
@@ -163,14 +192,31 @@ $ORIGIN example.com.
 www                  600     IN A        192.0.2.1
 ```
 
-## Default Filtering
+## Output Control
 
-By default, `--bind` mode filters out NS records because:
-- External NS records (like Porkbun's) shouldn't be in local BIND zones
-- Prevents DNS configuration conflicts
-- Most users want local DNS serving without external dependencies
+### Default Behavior
+- Progress messages go to `stderr` 
+- Data files saved to disk
+- Full verbose output showing what's happening
 
-Use `--include-ns` if you need the original NS records for secondary DNS setups.
+### Quiet Mode (`--quiet`)
+- Suppresses progress messages
+- Only shows errors and warnings
+- Perfect for automated scripts
+
+### Stdout Mode (`--stdout`)
+- Outputs data to `stdout` instead of files
+- Progress messages still go to `stderr`
+- Enables piping and shell redirection
+- Can be combined with `--quiet` for pure data output
+
+### Unix-Style Output
+Following standard Unix conventions:
+- **Data** → `stdout` (when using `--stdout`)
+- **Progress/Status** → `stderr` 
+- **Errors** → `stderr`
+
+This allows clean piping without interference from status messages.
 
 ## Error Handling
 
@@ -181,6 +227,15 @@ The tool provides clear error messages for common issues:
 - Permission errors
 - Malformed JSON data
 
+## Default Filtering
+
+By default, `--bind` mode filters out NS records because:
+- External NS records (like Porkbun's) shouldn't be in local BIND zones
+- Prevents DNS configuration conflicts
+- Most users want local DNS serving without external dependencies
+
+Use `--include-ns` if you need the original NS records for secondary DNS setups.
+
 ## Use Cases
 
 - **Local DNS serving**: Run your own authoritative DNS server
@@ -188,6 +243,8 @@ The tool provides clear error messages for common issues:
 - **Zone file management**: Convert API data to standard BIND format
 - **DNS migration**: Move from Porkbun to self-hosted DNS
 - **Development**: Test DNS changes locally before deploying
+- **Automation**: Script DNS updates and deployments
+- **Integration**: Pipe DNS data through shell tools for processing
 
 ## Requirements
 
@@ -225,4 +282,5 @@ Shawn Murphy <smurp@smurp.com>
 - Automatic NS record filtering
 - Batch domain processing
 - Flexible directory management
-
+- Output control with `--quiet` and `--stdout` flags
+- Unix-style stdout/stderr separation for scripting
