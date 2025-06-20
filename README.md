@@ -8,7 +8,7 @@ Convert Porkbun DNS records to BIND zone files with a simple two-phase workflow.
 - **Batch processing**: Handle multiple domains at once
 - **Smart filtering**: Automatically filters out external NS records (with override option)
 - **Flexible directories**: Control input/output locations
-- **Standard BIND format**: Generates properly formatted zone files with timestamp-based serials and succinct formatting
+- **Standard BIND format**: Generates properly formatted zone files with timestamp-based serials, priority-sorted MX records, and RFC-compliant quoted TXT values
 - **Clean output control**: Quiet mode and stdout output for scripting and automation
 
 ## Installation
@@ -191,7 +191,10 @@ $ORIGIN example.com.
 @ IN A 192.0.2.1
 www IN A 192.0.2.1
 mail IN A 192.0.2.2
-@ IN MX 10 mail.example.com
+@ IN MX 1 primary.mail.com
+@ IN MX 10 backup.mail.com
+@ IN TXT "v=spf1 include:_spf.google.com ~all"
+_dmarc IN TXT "v=DMARC1; p=quarantine; rua=mailto:admin@example.com"
 ```
 
 The zone files use:
@@ -199,6 +202,8 @@ The zone files use:
 - Relative names for subdomains (e.g., `www` instead of `www.example.com`)
 - Compact formatting without excessive padding
 - Timestamp-based serial numbers (YYYYMMDDHHMMSS format)
+- MX records sorted by priority (lowest number = highest priority)
+- Quoted TXT record values for RFC compliance
 
 ## Output Control
 
@@ -293,3 +298,4 @@ Shawn Murphy <smurp@smurp.com>
 - Output control with `--quiet` and `--stdout` flags
 - Unix-style stdout/stderr separation for scripting
 - Succinct BIND zone formatting with `@` shortcuts
+- Priority-sorted MX records and quoted TXT values

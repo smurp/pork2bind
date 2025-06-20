@@ -261,8 +261,23 @@ $ORIGIN ${domain}.
 
     // Sort records by type and name for cleaner output
     const sortedRecords = filteredRecords.sort((a, b) => {
+        // First sort by type
         if (a.type !== b.type) return a.type.localeCompare(b.type);
-        return a.name.localeCompare(b.name);
+        
+        // For MX records, sort by priority, then by content for stable ordering
+        if (a.type === 'MX') {
+            const prioA = parseInt(a.prio || 10);
+            const prioB = parseInt(b.prio || 10);
+            if (prioA !== prioB) return prioA - prioB;
+            // If same priority, sort by mail server name for consistency
+            return a.content.localeCompare(b.content);
+        }
+        
+        // For same type records, put @ first, then *, then alphabetical
+        const nameA = a.name === '@' ? '0' : a.name === '*' ? '1' : a.name;
+        const nameB = b.name === '@' ? '0' : b.name === '*' ? '1' : b.name;
+        
+        return nameA.localeCompare(nameB);
     });
 
     sortedRecords.forEach(record => {
@@ -283,6 +298,9 @@ $ORIGIN ${domain}.
         let content = record.content;
         if (record.type === 'MX') {
             content = `${record.prio || 10} ${record.content}`;
+        } else if (record.type === 'TXT') {
+            // Quote TXT record values
+            content = `"${record.content}"`;
         }
         
         // Compact formatting - no excessive padding
