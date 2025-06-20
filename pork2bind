@@ -266,7 +266,17 @@ $ORIGIN ${domain}.
     });
 
     sortedRecords.forEach(record => {
-        const name = record.name === '@' ? '@' : record.name;
+        // Use @ for apex domain, otherwise just the subdomain name
+        let name;
+        if (record.name === '@' || record.name === domain) {
+            name = '@';
+        } else if (record.name.endsWith(`.${domain}`)) {
+            // Strip the domain suffix for cleaner output
+            name = record.name.slice(0, -(domain.length + 1));
+        } else {
+            name = record.name;
+        }
+        
         const ttl = record.ttl || 3600;
         
         // Format record based on type
@@ -275,12 +285,8 @@ $ORIGIN ${domain}.
             content = `${record.prio || 10} ${record.content}`;
         }
         
-        // Ensure proper formatting
-        const nameField = name.padEnd(20);
-        const ttlField = ttl.toString().padStart(8);
-        const typeField = record.type.padEnd(8);
-        
-        zone += `${nameField} ${ttlField} IN ${typeField} ${content}\n`;
+        // Compact formatting - no excessive padding
+        zone += `${name} IN ${record.type} ${content}\n`;
     });
 
     return zone;

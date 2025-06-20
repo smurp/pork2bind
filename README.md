@@ -8,7 +8,7 @@ Convert Porkbun DNS records to BIND zone files with a simple two-phase workflow.
 - **Batch processing**: Handle multiple domains at once
 - **Smart filtering**: Automatically filters out external NS records (with override option)
 - **Flexible directories**: Control input/output locations
-- **Standard BIND format**: Generates properly formatted zone files with timestamp-based serials
+- **Standard BIND format**: Generates properly formatted zone files with timestamp-based serials and succinct formatting
 - **Clean output control**: Quiet mode and stdout output for scripting and automation
 
 ## Installation
@@ -113,7 +113,7 @@ pork2bind --bind example.com --include-ns
 # Fetch data
 pork2bind --json mysite.com
 
-# Generate zone file
+# Generate zone file  
 pork2bind --bind mysite.com
 ```
 
@@ -177,7 +177,7 @@ Raw DNS records from Porkbun API:
 ```
 
 ### BIND Zone Files
-Standard BIND format with SOA record and filtered records:
+Standard BIND format with SOA record and succinct formatting:
 ```
 $TTL 3600
 $ORIGIN example.com.
@@ -188,9 +188,17 @@ $ORIGIN example.com.
                     1209600         ; Expire
                     3600 )          ; Minimum TTL
 
-@                    600     IN A        192.0.2.1
-www                  600     IN A        192.0.2.1
+@ IN A 192.0.2.1
+www IN A 192.0.2.1
+mail IN A 192.0.2.2
+@ IN MX 10 mail.example.com
 ```
+
+The zone files use:
+- `@` symbol for the apex domain (shortcut for `$ORIGIN`)
+- Relative names for subdomains (e.g., `www` instead of `www.example.com`)
+- Compact formatting without excessive padding
+- Timestamp-based serial numbers (YYYYMMDDHHMMSS format)
 
 ## Output Control
 
@@ -239,7 +247,7 @@ Use `--include-ns` if you need the original NS records for secondary DNS setups.
 ## Use Cases
 
 - **Local DNS serving**: Run your own authoritative DNS server
-- **DNS backup**: Keep local copies of your DNS configuration
+- **DNS backup**: Keep local copies of your DNS configuration  
 - **Zone file management**: Convert API data to standard BIND format
 - **DNS migration**: Move from Porkbun to self-hosted DNS
 - **Development**: Test DNS changes locally before deploying
@@ -284,3 +292,4 @@ Shawn Murphy <smurp@smurp.com>
 - Flexible directory management
 - Output control with `--quiet` and `--stdout` flags
 - Unix-style stdout/stderr separation for scripting
+- Succinct BIND zone formatting with `@` shortcuts
