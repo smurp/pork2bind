@@ -1,0 +1,36 @@
+{
+  "name": "pork2bind",
+  "version": "1.0.0",
+  "description": "Convert Porkbun DNS records to BIND zone files",
+  "main": "pork2bind",
+  "bin": {
+    "pork2bind": "./pork2bind"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "dns",
+    "bind",
+    "porkbun",
+    "zone-files",
+    "dns-management",
+    "nameserver"
+  ],
+  "author": "Shawn Murphy <smurp@smurp.com>",
+  "license": "GPL-3.0",
+  "dependencies": {
+    "dotenv": "^16.0.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/smurp/pork2bind.git"
+  },
+  "bugs": {
+    "url": "https://github.com/smurp/pork2bind/issues"
+  },
+  "homepage": "https://github.com/smurp/pork2bind#readme"
+}

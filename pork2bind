@@ -1,0 +1,349 @@
+#!/usr/bin/env node
+
+const fs = require('fs').promises;
+const path = require('path');
+const https = require('https');
+
+// Parse command line arguments
+function parseArgs() {
+    const args = process.argv.slice(2);
+    const config = {
+        mode: null,
+        domains: [],
+        to: process.cwd(),
+        from: process.cwd(),
+        includeNS: false
+    };
+
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        
+        if (arg === '--json') {
+            config.mode = 'json';
+        } else if (arg === '--bind') {
+            config.mode = 'bind';
+        } else if (arg === '--to') {
+            config.to = args[++i];
+        } else if (arg === '--from') {
+            config.from = args[++i];
+        } else if (arg === '--include-ns') {
+            config.includeNS = true;
+        } else if (arg === '--help' || arg === '-h') {
+            showHelp();
+            process.exit(0);
+        } else if (!arg.startsWith('--')) {
+            config.domains.push(arg);
+        } else {
+            console.error(`Unknown option: ${arg}`);
+            process.exit(1);
+        }
+    }
+
+    // Validation
+    if (!config.mode) {
+        console.error('Error: Must specify either --json or --bind');
+        showHelp();
+        process.exit(1);
+    }
+
+    if (config.domains.length === 0) {
+        console.error('Error: Must specify at least one domain');
+        process.exit(1);
+    }
+
+    return config;
+}
+
+function showHelp() {
+    console.log(`
+pork2bind - DNS Zone Management Tool
+
+USAGE:
+  pork2bind --json domain1.tld [domain2.tld ...] [--to directory]
+  pork2bind --bind domain1.tld [domain2.tld ...] [--from directory] [--to directory]
+
+MODES:
+  --json    Fetch DNS records from Porkbun API and save as JSON files
+  --bind    Convert JSON files to BIND zone files
+
+OPTIONS:
+  --to         Output directory (default: current directory)
+  --from       Input directory for JSON files (default: current directory)
+  --include-ns Include NS records in BIND output (default: filtered out)
+  --help       Show this help message
+
+EXAMPLES:
+  # Fetch DNS data from Porkbun API
+  pork2bind --json example.com other.com --to ./dns-cache
+
+  # Convert to BIND zone files (filters NS records by default)
+  pork2bind --bind example.com other.com --from ./dns-cache --to /etc/bind/zones
+  
+  # Include NS records in BIND output
+  pork2bind --bind example.com --include-ns
+
+ENVIRONMENT:
+  Requires .env file with:
+    PORKBUN_API_KEY=your_api_key
+    PORKBUN_SECRET_KEY=your_secret_key
+`);
+}
+
+// Load environment variables
+function loadEnv() {
+    try {
+        require('dotenv').config();
+        
+        const apiKey = process.env.PORKBUN_API_KEY;
+        const secretKey = process.env.PORKBUN_SECRET_KEY;
+        
+        if (!apiKey || !secretKey) {
+            console.error('Error: Missing PORKBUN_API_KEY or PORKBUN_SECRET_KEY in .env file');
+            process.exit(1);
+        }
+        
+        return { apiKey, secretKey };
+    } catch (error) {
+        console.error('Error: dotenv package not found. Install with: npm install dotenv');
+        process.exit(1);
+    }
+}
+
+// Test API connection with ping endpoint
+function testAPIConnection(apiKey, secretKey) {
+    return new Promise((resolve, reject) => {
+        const postData = JSON.stringify({
+            apikey: apiKey,
+            secretapikey: secretKey
+        });
+
+        const options = {
+            hostname: 'api.porkbun.com',
+            path: '/api/json/v3/ping',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(postData)
+            }
+        };
+
+        const req = https.request(options, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                console.log(`API Test - Status: ${res.statusCode}`);
+                console.log(`API Test - Response: ${data}`);
+                try {
+                    const response = JSON.parse(data);
+                    resolve(response);
+                } catch (e) {
+                    reject(new Error(`API ping failed - not JSON: ${data}`));
+                }
+            });
+        });
+
+        req.on('error', reject);
+        req.write(postData);
+        req.end();
+    });
+}
+
+// Fetch DNS records from Porkbun API
+function fetchDNSRecords(domain, apiKey, secretKey) {
+    return new Promise((resolve, reject) => {
+        const postData = JSON.stringify({
+            apikey: apiKey,
+            secretapikey: secretKey
+        });
+
+        console.log(`Debug - API Key present: ${!!apiKey} (length: ${apiKey ? apiKey.length : 0})`);
+        console.log(`Debug - Secret Key present: ${!!secretKey} (length: ${secretKey ? secretKey.length : 0})`);
+
+        const options = {
+            hostname: 'api.porkbun.com',
+            path: `/api/json/v3/dns/retrieve/${domain}`,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(postData)
+            }
+        };
+
+        const req = https.request(options, (res) => {
+            console.log(`Status Code: ${res.statusCode}`);
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                console.log(`Raw Response: ${data.substring(0, 200)}...`);
+                try {
+                    const response = JSON.parse(data);
+                    if (response.status === 'SUCCESS') {
+                        resolve(response.records || []);
+                    } else {
+                        reject(new Error(`API Error: ${response.message || 'Unknown error'}`));
+                    }
+                } catch (e) {
+                    reject(new Error(`Failed to parse API response: ${data}`));
+                }
+            });
+        });
+
+        req.on('error', reject);
+        req.write(postData);
+        req.end();
+    });
+}
+
+// Generate BIND zone file from DNS records
+function generateBindZone(domain, records, includeNS = false) {
+    // Generate serial in YYYYMMDDHHMMSS format
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hour = String(now.getHours()).padStart(2, '0');
+    const minute = String(now.getMinutes()).padStart(2, '0');
+    const second = String(now.getSeconds()).padStart(2, '0');
+    const serial = `${year}${month}${day}${hour}${minute}${second}`;
+    
+    // Filter records if needed
+    let filteredRecords = records;
+    if (!includeNS) {
+        filteredRecords = records.filter(record => record.type !== 'NS');
+        console.log(`  Filtered out ${records.length - filteredRecords.length} NS record(s)`);
+    }
+    
+    let zone = `$TTL 3600
+$ORIGIN ${domain}.
+@    IN    SOA    ns1.${domain}. admin.${domain}. (
+                    ${serial}       ; Serial
+                    3600            ; Refresh
+                    1800            ; Retry
+                    1209600         ; Expire
+                    3600 )          ; Minimum TTL
+
+`;
+
+    // Sort records by type and name for cleaner output
+    const sortedRecords = filteredRecords.sort((a, b) => {
+        if (a.type !== b.type) return a.type.localeCompare(b.type);
+        return a.name.localeCompare(b.name);
+    });
+
+    sortedRecords.forEach(record => {
+        const name = record.name === '@' ? '@' : record.name;
+        const ttl = record.ttl || 3600;
+        
+        // Format record based on type
+        let content = record.content;
+        if (record.type === 'MX') {
+            content = `${record.prio || 10} ${record.content}`;
+        }
+        
+        // Ensure proper formatting
+        const nameField = name.padEnd(20);
+        const ttlField = ttl.toString().padStart(8);
+        const typeField = record.type.padEnd(8);
+        
+        zone += `${nameField} ${ttlField} IN ${typeField} ${content}\n`;
+    });
+
+    return zone;
+}
+
+// Ensure directory exists
+async function ensureDirectory(dir) {
+    try {
+        await fs.access(dir);
+    } catch {
+        await fs.mkdir(dir, { recursive: true });
+    }
+}
+
+// JSON mode: Fetch DNS records and save to JSON files
+async function jsonMode(config) {
+    const { apiKey, secretKey } = loadEnv();
+    await ensureDirectory(config.to);
+
+    // Test API connection first
+    console.log('Testing API connection...');
+    try {
+        await testAPIConnection(apiKey, secretKey);
+        console.log('✓ API connection successful\n');
+    } catch (error) {
+        console.error(`✗ API connection failed: ${error.message}`);
+        console.error('Please check your API credentials in .env file\n');
+        return;
+    }
+
+    console.log(`Fetching DNS records for ${config.domains.length} domain(s)...`);
+    
+    for (const domain of config.domains) {
+        try {
+            console.log(`Fetching ${domain}...`);
+            const records = await fetchDNSRecords(domain, apiKey, secretKey);
+            
+            const outputFile = path.join(config.to, `${domain}.json`);
+            await fs.writeFile(outputFile, JSON.stringify(records, null, 2));
+            
+            console.log(`✓ Saved ${records.length} records to ${outputFile}`);
+        } catch (error) {
+            console.error(`✗ Failed to fetch ${domain}: ${error.message}`);
+        }
+    }
+}
+
+// BIND mode: Convert JSON files to BIND zone files
+async function bindMode(config) {
+    await ensureDirectory(config.to);
+
+    console.log(`Converting ${config.domains.length} domain(s) to BIND format...`);
+    
+    for (const domain of config.domains) {
+        try {
+            const inputFile = path.join(config.from, `${domain}.json`);
+            const outputFile = path.join(config.to, `db.${domain}`);
+            
+            // Read JSON file
+            const jsonData = await fs.readFile(inputFile, 'utf8');
+            const records = JSON.parse(jsonData);
+            
+            // Generate BIND zone
+            const zoneContent = generateBindZone(domain, records, config.includeNS);
+            await fs.writeFile(outputFile, zoneContent);
+            
+            console.log(`✓ Converted ${domain} (${records.length} records) to ${outputFile}`);
+        } catch (error) {
+            if (error.code === 'ENOENT') {
+                console.error(`✗ JSON file not found: ${path.join(config.from, domain + '.json')}`);
+            } else {
+                console.error(`✗ Failed to convert ${domain}: ${error.message}`);
+            }
+        }
+    }
+}
+
+// Main function
+async function main() {
+    try {
+        const config = parseArgs();
+        
+        if (config.mode === 'json') {
+            await jsonMode(config);
+        } else if (config.mode === 'bind') {
+            await bindMode(config);
+        }
+        
+        console.log('Done!');
+    } catch (error) {
+        console.error(`Error: ${error.message}`);
+        process.exit(1);
+    }
+}
+
+// Run the program
+if (require.main === module) {
+    main();
+}
+
+module.exports = { parseArgs, fetchDNSRecords, generateBindZone };
