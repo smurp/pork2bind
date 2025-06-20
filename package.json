@@ -1,6 +1,6 @@
 {
   "name": "pork2bind",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Convert Porkbun DNS records to BIND zone files",
   "main": "pork2bind",
   "bin": {
