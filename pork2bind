@@ -14,7 +14,12 @@ function parseArgs() {
         from: process.cwd(),
         includeNS: false,
         quiet: false,
-        stdout: false
+        stdout: false,
+        allDomains: false,
+        listDomains: false,
+        checkApiAccess: false,
+        apiEnabledOnly: false,
+        continueOnError: false
     };
 
     for (let i = 0; i < args.length; i++) {
@@ -34,8 +39,21 @@ function parseArgs() {
             config.quiet = true;
         } else if (arg === '--stdout') {
             config.stdout = true;
+        } else if (arg === '--all-domains') {
+            config.allDomains = true;
+        } else if (arg === '--list-domains') {
+            config.listDomains = true;
+        } else if (arg === '--check-api-access') {
+            config.checkApiAccess = true;
+        } else if (arg === '--api-enabled-only') {
+            config.apiEnabledOnly = true;
+        } else if (arg === '--continue-on-error') {
+            config.continueOnError = true;
         } else if (arg === '--help' || arg === '-h') {
             showHelp();
+            process.exit(0);
+        } else if (arg === '--version' || arg === '-v') {
+            showVersion();
             process.exit(0);
         } else if (!arg.startsWith('--')) {
             config.domains.push(arg);
@@ -46,18 +64,23 @@ function parseArgs() {
     }
 
     // Validation
-    if (!config.mode) {
-        console.error('Error: Must specify either --json or --bind');
+    if (!config.mode && !config.listDomains && !config.checkApiAccess) {
+        console.error('Error: Must specify either --json, --bind, --list-domains, or --check-api-access');
         showHelp();
         process.exit(1);
     }
 
-    if (config.domains.length === 0) {
-        console.error('Error: Must specify at least one domain');
+    if ((config.mode || config.checkApiAccess) && config.domains.length === 0 && !config.allDomains) {
+        console.error('Error: Must specify domains or use --all-domains');
         process.exit(1);
     }
 
     return config;
+}
+
+function showVersion() {
+    const packageJson = require('./package.json');
+    console.log(`pork2bind v${packageJson.version}`);
 }
 
 function showHelp() {
@@ -67,18 +90,27 @@ pork2bind - DNS Zone Management Tool
 USAGE:
   pork2bind --json domain1.tld [domain2.tld ...] [--to directory]
   pork2bind --bind domain1.tld [domain2.tld ...] [--from directory] [--to directory]
+  pork2bind --list-domains [--stdout]
+  pork2bind --check-api-access [domain1.tld ...] [--all-domains]
+  pork2bind --json --all-domains [--api-enabled-only] [--continue-on-error]
 
 MODES:
-  --json    Fetch DNS records from Porkbun API and save as JSON files
-  --bind    Convert JSON files to BIND zone files
+  --json           Fetch DNS records from Porkbun API and save as JSON files
+  --bind           Convert JSON files to BIND zone files
+  --list-domains   List all domains in your Porkbun account
+  --check-api-access Check which domains have API access enabled
 
 OPTIONS:
-  --to         Output directory (default: current directory)
-  --from       Input directory for JSON files (default: current directory)
-  --include-ns Include NS records in BIND output (default: filtered out)
-  --quiet      Minimal output - only errors and warnings
-  --stdout     Output data to stdout instead of files
-  --help       Show this help message
+  --to             Output directory (default: current directory)
+  --from           Input directory for JSON files (default: current directory)
+  --include-ns     Include NS records in BIND output (default: filtered out)
+  --quiet          Minimal output - only errors and warnings
+  --stdout         Output data to stdout instead of files
+  --all-domains    Process all domains in your Porkbun account
+  --api-enabled-only Only process domains with API access enabled
+  --continue-on-error Continue processing even if some domains fail
+  --version        Show version number
+  --help           Show this help message
 
 EXAMPLES:
   # Fetch DNS data from Porkbun API
@@ -90,12 +122,20 @@ EXAMPLES:
   # Include NS records in BIND output
   pork2bind --bind example.com --include-ns
 
-  # Quiet operation for scripts
-  pork2bind --json example.com --quiet
+  # List all domains in your account
+  pork2bind --list-domains
 
-  # Output to stdout for piping
-  pork2bind --json example.com --stdout > example.com.json
-  pork2bind --bind example.com --stdout > db.example.com
+  # Check API access for specific domains
+  pork2bind --check-api-access example.com other.com
+
+  # Check API access for all domains
+  pork2bind --check-api-access --all-domains
+
+  # Process all domains you own
+  pork2bind --json --all-domains --to ./dns-backup
+
+  # Process only API-enabled domains
+  pork2bind --json --all-domains --api-enabled-only --quiet
 
 ENVIRONMENT:
   Requires .env file with:
@@ -138,6 +178,57 @@ function loadEnv() {
     } catch (error) {
         console.error('Error: dotenv package not found. Install with: npm install dotenv');
         process.exit(1);
+    }
+}
+
+// List all domains in account
+function listAllDomains(apiKey, secretKey) {
+    return new Promise((resolve, reject) => {
+        const postData = JSON.stringify({
+            apikey: apiKey,
+            secretapikey: secretKey
+        });
+
+        const options = {
+            hostname: 'api.porkbun.com',
+            path: '/api/json/v3/domain/listAll',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(postData)
+            }
+        };
+
+        const req = https.request(options, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try {
+                    const response = JSON.parse(data);
+                    if (response.status === 'SUCCESS') {
+                        resolve(response.domains || []);
+                    } else {
+                        reject(new Error(`API Error: ${response.message || 'Unknown error'}`));
+                    }
+                } catch (e) {
+                    reject(new Error(`Failed to parse API response: ${data}`));
+                }
+            });
+        });
+
+        req.on('error', reject);
+        req.write(postData);
+        req.end();
+    });
+}
+
+// Check API access for a domain by attempting to fetch its records
+async function checkDomainApiAccess(domain, apiKey, secretKey) {
+    try {
+        await fetchDNSRecords(domain, apiKey, secretKey);
+        return { domain, hasAccess: true, error: null };
+    } catch (error) {
+        return { domain, hasAccess: false, error: error.message };
     }
 }
 
@@ -319,28 +410,133 @@ async function ensureDirectory(dir) {
     }
 }
 
+// List domains mode
+async function listDomainsMode(config) {
+    const { apiKey, secretKey } = loadEnv();
+
+    try {
+        log('Fetching domain list from Porkbun...', config);
+        const domains = await listAllDomains(apiKey, secretKey);
+        
+        if (config.stdout) {
+            // Output domain names to stdout (one per line)
+            domains.forEach(domain => console.log(domain.domain));
+        } else {
+            // Display formatted output to stderr
+            console.error(`\nFound ${domains.length} domain(s) in your account:\n`);
+            domains.forEach(domain => {
+                const status = domain.status || 'UNKNOWN';
+                const expiry = domain.expireDate ? new Date(domain.expireDate).toISOString().split('T')[0] : 'Unknown';
+                console.error(`  ${domain.domain.padEnd(30)} ${status.padEnd(10)} (expires: ${expiry})`);
+            });
+        }
+    } catch (error) {
+        logError(`Failed to list domains: ${error.message}`, config);
+        process.exit(1);
+    }
+}
+
+// Check API access mode
+async function checkApiAccessMode(config) {
+    const { apiKey, secretKey } = loadEnv();
+    let domainsToCheck = config.domains;
+
+    if (config.allDomains) {
+        try {
+            log('Fetching domain list from Porkbun...', config);
+            const allDomains = await listAllDomains(apiKey, secretKey);
+            domainsToCheck = allDomains.map(d => d.domain);
+        } catch (error) {
+            logError(`Failed to list domains: ${error.message}`, config);
+            process.exit(1);
+        }
+    }
+
+    log(`Checking API access for ${domainsToCheck.length} domain(s)...`, config);
+    
+    const results = [];
+    for (const domain of domainsToCheck) {
+        log(`Checking ${domain}...`, config);
+        const result = await checkDomainApiAccess(domain, apiKey, secretKey);
+        results.push(result);
+        
+        if (result.hasAccess) {
+            logSuccess(`${domain} - API access enabled`, config);
+        } else {
+            logError(`${domain} - API access disabled (${result.error})`, config);
+        }
+    }
+
+    // Summary
+    const enabled = results.filter(r => r.hasAccess).length;
+    const disabled = results.length - enabled;
+    
+    console.error(`\nSummary: ${enabled} enabled, ${disabled} disabled`);
+    
+    if (config.stdout) {
+        // Output only enabled domains to stdout
+        results.filter(r => r.hasAccess).forEach(r => console.log(r.domain));
+    }
+}
+
 // JSON mode: Fetch DNS records and save to JSON files
 async function jsonMode(config) {
     const { apiKey, secretKey } = loadEnv();
+    let domainsToProcess = config.domains;
+
+    // Handle --all-domains flag
+    if (config.allDomains) {
+        try {
+            log('Fetching domain list from Porkbun...', config);
+            const allDomains = await listAllDomains(apiKey, secretKey);
+            domainsToProcess = allDomains.map(d => d.domain);
+            log(`Found ${domainsToProcess.length} domain(s) in account`, config);
+        } catch (error) {
+            logError(`Failed to list domains: ${error.message}`, config);
+            process.exit(1);
+        }
+    }
+
+    // Filter to API-enabled domains if requested
+    if (config.apiEnabledOnly) {
+        log('Checking API access for all domains...', config);
+        const accessChecks = [];
+        for (const domain of domainsToProcess) {
+            const result = await checkDomainApiAccess(domain, apiKey, secretKey);
+            accessChecks.push(result);
+        }
+        
+        domainsToProcess = accessChecks.filter(r => r.hasAccess).map(r => r.domain);
+        const skipped = accessChecks.length - domainsToProcess.length;
+        
+        if (skipped > 0) {
+            log(`Skipped ${skipped} domain(s) without API access`, config);
+        }
+    }
     
     if (!config.stdout) {
         await ensureDirectory(config.to);
     }
 
-    // Test API connection first
-    log('Testing API connection...', config);
-    try {
-        await testAPIConnection(apiKey, secretKey);
-        log('✓ API connection successful\n', config);
-    } catch (error) {
-        logError(`API connection failed: ${error.message}`, config);
-        console.error('Please check your API credentials in .env file\n');
-        return;
+    // Test API connection first (only if we have domains to process)
+    if (domainsToProcess.length > 0) {
+        log('Testing API connection...', config);
+        try {
+            await testAPIConnection(apiKey, secretKey);
+            log('✓ API connection successful\n', config);
+        } catch (error) {
+            logError(`API connection failed: ${error.message}`, config);
+            console.error('Please check your API credentials in .env file\n');
+            return;
+        }
     }
 
-    log(`Fetching DNS records for ${config.domains.length} domain(s)...`, config);
+    log(`Fetching DNS records for ${domainsToProcess.length} domain(s)...`, config);
     
-    for (const domain of config.domains) {
+    let successCount = 0;
+    let errorCount = 0;
+    
+    for (const domain of domainsToProcess) {
         try {
             log(`Fetching ${domain}...`, config);
             const records = await fetchDNSRecords(domain, apiKey, secretKey);
@@ -350,7 +546,7 @@ async function jsonMode(config) {
             if (config.stdout) {
                 // Output to stdout for piping
                 console.log(jsonData);
-                if (config.domains.length > 1) {
+                if (domainsToProcess.length > 1) {
                     console.error('Warning: Multiple domains with --stdout will concatenate JSON objects');
                 }
             } else {
@@ -359,9 +555,19 @@ async function jsonMode(config) {
                 await fs.writeFile(outputFile, jsonData);
                 logSuccess(`Saved ${records.length} records to ${outputFile}`, config);
             }
+            successCount++;
         } catch (error) {
             logError(`Failed to fetch ${domain}: ${error.message}`, config);
+            errorCount++;
+            
+            if (!config.continueOnError) {
+                process.exit(1);
+            }
         }
+    }
+    
+    if (domainsToProcess.length > 1) {
+        log(`\nCompleted: ${successCount} successful, ${errorCount} failed`, config);
     }
 }
 
@@ -411,13 +617,17 @@ async function main() {
     try {
         const config = parseArgs();
         
-        if (config.mode === 'json') {
+        if (config.listDomains) {
+            await listDomainsMode(config);
+        } else if (config.checkApiAccess) {
+            await checkApiAccessMode(config);
+        } else if (config.mode === 'json') {
             await jsonMode(config);
         } else if (config.mode === 'bind') {
             await bindMode(config);
         }
         
-        if (!config.quiet && !config.stdout) {
+        if (!config.quiet && !config.stdout && !config.listDomains && !config.checkApiAccess) {
             console.error('Done!');
         }
     } catch (error) {
