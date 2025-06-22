@@ -7,6 +7,7 @@ Convert Porkbun DNS records to BIND zone files with a simple two-phase workflow.
 - **Two-phase operation**: Fetch DNS data from Porkbun API, then convert to BIND format
 - **Batch processing**: Handle multiple domains at once
 - **Domain discovery**: Automatically find all domains in your Porkbun account
+- **Pattern filtering**: Include/exclude domains using glob patterns (`*.com`, `test-*`)
 - **API access checking**: Detect which domains have API access enabled
 - **Smart filtering**: Automatically filters out external NS records (with override option)
 - **Flexible directories**: Control input/output locations
@@ -64,8 +65,14 @@ First, discover what domains you own and which have API access:
 # List all domains in your Porkbun account
 pork2bind --list-domains
 
+# List only .com domains
+pork2bind --list-domains --all-domains --match "*.com"
+
 # Check which domains have API access enabled
 pork2bind --check-api-access --all-domains
+
+# Check API access for only production domains
+pork2bind --check-api-access --all-domains --match "prod-*"
 
 # Get only API-enabled domains for scripting
 pork2bind --check-api-access --all-domains --stdout > enabled-domains.txt
@@ -90,6 +97,12 @@ pork2bind --json --all-domains --api-enabled-only
 
 # Continue processing even if some domains fail
 pork2bind --json --all-domains --continue-on-error
+
+# Only process .com domains
+pork2bind --json --all-domains --match "*.com"
+
+# Process everything except test domains
+pork2bind --json --all-domains --exclude "test-*"
 
 # Save to specific directory
 pork2bind --json --all-domains --to ./dns-cache
@@ -124,6 +137,8 @@ pork2bind --bind example.com --include-ns
 - `--all-domains` - Process all domains in your Porkbun account
 - `--api-enabled-only` - Only process domains with API access enabled
 - `--continue-on-error` - Continue processing even if some domains fail
+- `--match <pattern>` - Only include domains matching glob pattern
+- `--exclude <pattern>` - Exclude domains matching glob pattern
 - `--help` - Show help message
 
 ### Discovery Commands
@@ -157,14 +172,32 @@ pork2bind --bind mysite.com
 # See all your domains
 pork2bind --list-domains
 
-# Check API access for all domains
-pork2bind --check-api-access --all-domains
+# See only .com domains
+pork2bind --list-domains --all-domains --match "*.com"
 
-# Backup all API-enabled domains
-pork2bind --json --all-domains --api-enabled-only --to ./dns-backup
+# Check API access for production domains
+pork2bind --check-api-access --all-domains --match "prod-*"
 
-# Process domains that might have issues (continue on errors)
-pork2bind --json --all-domains --continue-on-error --quiet
+# Backup all API-enabled .org domains
+pork2bind --json --all-domains --match "*.org" --api-enabled-only --to ./org-backup
+
+# Process all domains except test ones
+pork2bind --json --all-domains --exclude "test-*" --exclude "dev-*" --quiet
+```
+
+### Pattern Filtering Examples
+```bash
+# Match patterns (--match)
+pork2bind --json --all-domains --match "*.com"        # All .com domains
+pork2bind --json --all-domains --match "prod-*"       # Domains starting with "prod-"
+pork2bind --json --all-domains --match "*-staging"    # Domains ending with "-staging"
+
+# Exclude patterns (--exclude)
+pork2bind --json --all-domains --exclude "test-*"     # Exclude test domains
+pork2bind --json --all-domains --exclude "temp-*"     # Exclude temporary domains
+
+# Combine filters
+pork2bind --json --all-domains --match "*.com" --exclude "test-*"
 ```
 
 ### Organized Workflow
@@ -212,8 +245,11 @@ for domain in $(cat domains.txt); do
   pork2bind --json $domain --stdout --quiet > backup/${domain}.json
 done
 
-# Or use the built-in --all-domains feature
+# Or use the built-in --all-domains feature with filtering
 pork2bind --json --all-domains --api-enabled-only --to ./backup --quiet
+
+# Backup only production domains
+pork2bind --json --all-domains --match "prod-*" --to ./prod-backup --quiet
 ```
 
 ## Output Format
@@ -287,6 +323,49 @@ Following standard Unix conventions:
 
 This allows clean piping without interference from status messages.
 
+## Pattern Matching
+
+The `--match` and `--exclude` flags support glob patterns for flexible domain filtering:
+
+### Supported Patterns
+- `*` - Matches any number of characters
+- `?` - Matches exactly one character
+- Patterns are case-insensitive
+
+### Common Use Cases
+```bash
+# TLD filtering
+--match "*.com"              # All .com domains
+--match "*.org"              # All .org domains
+
+# Prefix filtering  
+--match "prod-*"             # Production domains
+--match "staging-*"          # Staging domains
+
+# Suffix filtering
+--match "*-api"              # API domains
+--match "*-staging"          # Staging environments
+
+# Exclusion filtering
+--exclude "test-*"           # Skip test domains
+--exclude "temp-*"           # Skip temporary domains
+--exclude "dev-*"            # Skip development domains
+
+# Complex combinations
+--match "*.com" --exclude "test-*"           # .com domains except tests
+--match "prod-*" --exclude "*-staging"       # Prod domains except staging
+```
+
+### Multiple Patterns
+You can use multiple `--exclude` patterns to filter out different types of domains:
+```bash
+pork2bind --json --all-domains \
+  --exclude "test-*" \
+  --exclude "dev-*" \
+  --exclude "temp-*" \
+  --to ./production-backup
+```
+
 ## Error Handling
 
 The tool provides clear error messages for common issues:
@@ -344,7 +423,7 @@ pork2bind --json --all-domains --continue-on-error
 - **Development**: Test DNS changes locally before deploying
 - **Automation**: Script DNS updates and deployments
 - **Integration**: Pipe DNS data through shell tools for processing
-- **Portfolio management**: Bulk operations across many domains
+- **Portfolio management**: Bulk operations across many domains with pattern filtering
 - **Disaster recovery**: Maintain offline copies of all DNS configurations
 
 ## Requirements
@@ -390,3 +469,4 @@ Shawn Murphy <smurp@smurp.com>
 - Domain discovery with `--list-domains` and `--all-domains`
 - API access checking with `--check-api-access`
 - Error resilience with `--continue-on-error` and `--api-enabled-only`
+- Pattern filtering with `--match` and `--exclude` for domain selection
