@@ -204,7 +204,7 @@ function matchesGlob(str, pattern) {
         .replace(/\./g, '\\.')  // Escape dots
         .replace(/\*/g, '.*')   // Convert * to .*
         .replace(/\?/g, '.')    // Convert ? to .
-        + '
+          + '$';
 function listAllDomains(apiKey, secretKey) {
     return new Promise((resolve, reject) => {
         const postData = JSON.stringify({
